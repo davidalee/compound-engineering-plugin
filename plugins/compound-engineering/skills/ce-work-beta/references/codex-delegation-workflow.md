@@ -88,6 +88,30 @@ On decline:
 
 Delegate all units in one batch. If the plan exceeds 5 units, split into batches at the plan's own phase boundaries, or in groups of roughly 5 -- never splitting units that share files. Skip delegation entirely if every unit is trivial.
 
+## Per-Batch Effort Resolution
+
+Before each batch, assess complexity to determine `effective_effort`. The config `work_delegate_effort` acts as a floor — `effective_effort` will never be lower than the config value.
+
+**Complexity tiers:**
+
+| Tier | Signals | Effort |
+|------|---------|--------|
+| Trivial | ≤2 files, no behavioral change (config, rename, typo) | default (no flag) |
+| Moderate | 3–9 files, clear scope, no high-risk areas | `medium` |
+| Complex | 5+ files OR touches auth, payments, migrations, external APIs, or error handling | `high` |
+| Architectural | 10+ files OR cross-cutting changes OR multiple high-risk areas | `xhigh` |
+
+**Resolution steps:**
+1. Count implementation files in the batch's combined `Files:` list (Create + Modify paths; exclude Test paths)
+2. Check for high-risk signals: auth/session logic, payments, database migrations, external API calls, error handling with retries/fallbacks, changes spanning 3+ layers
+3. Select the matching tier
+4. If `delegate_effort` is set in config, apply as floor using ordering `medium < high < xhigh`; if the tier is "default (no flag)", the config floor wins
+5. If `delegate_effort` is unset in config, use the tier directly — "default (no flag)" means omit the effort flag and let Codex use its built-in default
+
+When `effective_effort` resolves to "default (no flag)", omit the effort flag entirely from the invocation.
+
+Use `effective_effort` in place of `delegate_effort` throughout the Execution Loop.
+
 ## Prompt Template
 
 At the start of delegated execution, create a per-run OS-temp scratch directory via `mktemp -d` and capture its **absolute path** for all downstream use. All scratch files for this invocation live under that directory. Do not use `.context/` — these scratch files are per-run throwaway that get cleaned up when delegated execution ends (see Cleanup below), matching the repo Scratch Space convention for one-shot artifacts. Do not pass unresolved shell-variable strings to non-shell tools (Write, Read); use the absolute path returned by `mktemp -d`.
@@ -239,7 +263,7 @@ codex exec \
 **Conditional flags** — only include each line when the corresponding skill-state value is set:
 
 - If `delegate_model` is set, insert `  -m "<delegate_model>" \` as a line before `$SANDBOX_FLAG`.
-- If `delegate_effort` is set, insert `  -c 'model_reasoning_effort="<delegate_effort>"' \` as a line before `$SANDBOX_FLAG`.
+- If `effective_effort` is set (resolved via Per-Batch Effort Resolution above), insert `  -c 'model_reasoning_effort="<effective_effort>"' \` as a line before `$SANDBOX_FLAG`.
 
 When either value is unset, omit its line entirely — Codex resolves the default from the user's `~/.codex/config.toml` (and ultimately the CLI's own built-in default). Do not substitute a placeholder string for unset values.
 
