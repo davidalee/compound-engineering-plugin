@@ -42,12 +42,14 @@ After extracting tokens from arguments, resolve the delegation state using this 
 2. **Config file** -- extract settings from the config block below. Value `codex` for `work_delegate` activates delegation; `false` deactivates.
 3. **Hard default** -- `false` (delegation off)
 
-**Config (pre-resolved):**
-!`(top=$(git rev-parse --show-toplevel 2>/dev/null); [ -n "$top" ] && cat "$top/.compound-engineering/config.local.yaml" 2>/dev/null) || echo '__NO_CONFIG__'`
+**Config:**
 
-If the block above contains YAML key-value pairs, extract values for the keys listed below.
-If it shows `__NO_CONFIG__`, the file does not exist — all settings fall through to defaults.
-If it shows an unresolved command string, read `.compound-engineering/config.local.yaml` from the repo root using the native file-read tool (e.g., Read in Claude Code, read_file in Codex). If the file does not exist, all settings fall through to defaults.
+Read the config file using native tools:
+1. Run `git rev-parse --show-toplevel` via the Bash tool to get the repo root
+2. Read `<repo-root>/.compound-engineering/config.local.yaml` using the native file-read tool
+3. If the file does not exist, all settings fall through to defaults
+
+If the file contains YAML key-value pairs, extract values for the keys listed below.
 
 If any setting has an unrecognized value, fall through to the hard default for that setting. For optional settings without a hard default (`work_delegate_model`, `work_delegate_effort`), an unrecognized or unparseable value resolves to **unset** — the corresponding flag is omitted from the `codex exec` invocation so Codex resolves from `~/.codex/config.toml`. Never substitute an invalid value into the CLI flags.
 
