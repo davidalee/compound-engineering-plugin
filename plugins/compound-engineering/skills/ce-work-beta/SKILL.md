@@ -3,6 +3,7 @@ name: ce-work-beta
 description: "[BETA] Execute work with external delegate support. Same as ce-work but includes experimental Codex delegation mode for token-conserving code implementation."
 disable-model-invocation: true
 argument-hint: "[Plan doc path or description of work. Blank to auto use latest plan doc] [delegate:codex]"
+allowed-tools: Bash(bash *read-delegate-config.sh)
 ---
 
 # Work Execution Command
@@ -42,12 +43,16 @@ After extracting tokens from arguments, resolve the delegation state using this 
 2. **Config file** -- extract settings from the config block below. Value `codex` for `work_delegate` activates delegation; `false` deactivates.
 3. **Hard default** -- `false` (delegation off)
 
-**Config (pre-resolved):**
-!`(top=$(git rev-parse --show-toplevel 2>/dev/null); [ -n "$top" ] && cat "$top/.compound-engineering/config.local.yaml" 2>/dev/null) || echo '__NO_CONFIG__'`
+**Config (read at runtime):**
 
-If the block above contains YAML key-value pairs, extract values for the keys listed below.
+Run via the Bash tool:
+
+```bash
+bash "${CLAUDE_SKILL_DIR}/scripts/read-delegate-config.sh"
+```
+
+If the output contains YAML key-value pairs, extract values for the keys listed below.
 If it shows `__NO_CONFIG__`, the file does not exist — all settings fall through to defaults.
-If it shows an unresolved command string, read `.compound-engineering/config.local.yaml` from the repo root using the native file-read tool (e.g., Read in Claude Code, read_file in Codex). If the file does not exist, all settings fall through to defaults.
 
 If any setting has an unrecognized value, fall through to the hard default for that setting. For optional settings without a hard default (`work_delegate_model`, `work_delegate_effort`), an unrecognized or unparseable value resolves to **unset** — the corresponding flag is omitted from the `codex exec` invocation so Codex resolves from `~/.codex/config.toml`. Never substitute an invalid value into the CLI flags.
 
