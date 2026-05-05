@@ -609,6 +609,30 @@ describe("ce-code-review contract", () => {
     }
   })
 
+  test("protects code-review artifact directories with owner-only permissions", async () => {
+    const content = await readRepoFile("plugins/compound-engineering/skills/ce-code-review/SKILL.md")
+
+    expect(content).toContain('mkdir -p "/tmp/compound-engineering/ce-code-review/$RUN_ID"')
+    expect(content).toContain('chmod 700 "/tmp/compound-engineering/ce-code-review/$RUN_ID"')
+    expect(content).toContain("mkdir honors the caller's umask")
+    expect(content).toContain("per-reviewer findings and evidence")
+    expect(content).toContain("owner-only permissions")
+  })
+
+  test("subagent template documents OS-temp artifact path", async () => {
+    const template = await readRepoFile(
+      "plugins/compound-engineering/skills/ce-code-review/references/subagent-template.md",
+    )
+
+    expect(template).toContain(
+      "/tmp/compound-engineering/ce-code-review/{run_id}/{reviewer_name}.json",
+    )
+    expect(template).toContain(
+      "The one permitted exception is writing your full analysis to the OS temp artifact path",
+    )
+    expect(template).not.toContain("`.context/` artifact path")
+  })
+
   test("leaves data-migration-expert as the unstructured review format", async () => {
     const content = await readRepoFile(
       "plugins/compound-engineering/agents/ce-data-migration-expert.agent.md",
