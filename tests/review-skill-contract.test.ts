@@ -844,7 +844,7 @@ describe("ce-code-review-beta contract", () => {
       reviewerId,
       personaFile: `references/delegated-personas/${agentName}.agent.md`,
     }))
-    const actualMappings = delegatedMappingRows(content)
+    const actualMappings = delegatedMappingRows(workflow)
     const expectedPersonaFiles = expectedMappings.map(({ personaFile }) => path.basename(personaFile)).sort()
     const actualPersonaFiles = (await readdir(
       path.join(
@@ -855,7 +855,7 @@ describe("ce-code-review-beta contract", () => {
       .filter((file) => file.endsWith(".agent.md"))
       .sort()
 
-    expect(content).toContain("Use this exact mapping")
+    expect(workflow).toContain("Use this exact mapping")
     expect(workflow).toContain("canonical reviewer ID")
     expect(actualMappings).toEqual(expectedMappings)
     expect(actualPersonaFiles).toEqual(expectedPersonaFiles)
@@ -866,14 +866,14 @@ describe("ce-code-review-beta contract", () => {
       const personaContent = await readRepoFile(`plugins/compound-engineering/skills/ce-code-review-beta/${personaFile}`)
       expect(personaContent).toBe(agentContent)
       expect(parseFrontmatter(personaContent, personaFile).body.trim().length).toBeGreaterThan(0)
-      expect(content).toContain(`| \`${reviewerId}\` | \`${personaFile}\` |`)
+      expect(workflow).toContain(`| \`${reviewerId}\` | \`${personaFile}\` |`)
     }
 
     expect(content).not.toContain("ce-<persona-name>.agent.md")
     expect(content).not.toContain("${CLAUDE_PLUGIN_ROOT}/agents/")
     expect(content).not.toContain("plugins/compound-engineering/agents/<mapped")
-    expect(content).toContain("**GitHub-auth dependent:** `ce-previous-comments-reviewer`")
-    expect(content).not.toContain("| `previous-comments` | `references/delegated-personas/ce-previous-comments-reviewer.agent.md` |")
+    expect(workflow).toContain("**GitHub-auth dependent:** `ce-previous-comments-reviewer`")
+    expect(workflow).not.toContain("| `previous-comments` | `references/delegated-personas/ce-previous-comments-reviewer.agent.md` |")
   })
 
   test("codex delegation mode matrix is non-interactive outside interactive mode", async () => {
@@ -882,10 +882,10 @@ describe("ce-code-review-beta contract", () => {
       "plugins/compound-engineering/skills/ce-code-review-beta/references/codex-delegation-workflow.md",
     )
 
-    expect(content).toContain(
+    expect(workflow).toContain(
       "**`mode:headless`**: when `delegation_active` is true and `review_delegate_consent` is not recorded, fail fast",
     )
-    expect(content).toContain(
+    expect(workflow).toContain(
       "**`mode:autofix`**: delegation is permitted only when `review_delegate_consent: true` is already recorded.",
     )
     expect(workflow).toContain(
@@ -917,16 +917,18 @@ describe("ce-code-review-beta contract", () => {
   })
 
   test("delegated persona files are self-contained inside the skill", async () => {
-    const content = await readRepoFile("plugins/compound-engineering/skills/ce-code-review-beta/SKILL.md")
+    const workflow = await readRepoFile(
+      "plugins/compound-engineering/skills/ce-code-review-beta/references/codex-delegation-workflow.md",
+    )
 
-    expect(content).toContain("references/delegated-personas/<mapped-persona-file>")
-    expect(content).toContain("The workflow does not read plugin-level `agents/` files")
-    expect(content).toContain("**Do not read persona files in this stage.**")
-    expect(content).toContain("Stage 4 resolves each delegated persona's `.agent.md` content only after")
-    expect(content).toContain("Stage 4 is the single resolution point for delegated persona content")
-    expect(content).not.toContain("${CLAUDE_PLUGIN_ROOT}/agents/")
-    expect(content).not.toContain("plugins/compound-engineering/agents/")
-    expect(content).not.toContain("the orchestrator MUST read each delegated persona")
+    expect(workflow).toContain("references/delegated-personas/<mapped-persona-file>")
+    expect(workflow).toContain("The workflow does not read plugin-level `agents/` files")
+    expect(workflow).toContain("**Do not read persona files in this stage.**")
+    expect(workflow).toContain("Read each mapped persona file only after Stage 4 partitioning")
+    expect(workflow).toContain("Stage 4 is the single resolution point for delegated persona content")
+    expect(workflow).not.toContain("${CLAUDE_PLUGIN_ROOT}/agents/")
+    expect(workflow).not.toContain("plugins/compound-engineering/agents/")
+    expect(workflow).not.toContain("the orchestrator MUST read each delegated persona")
   })
 
   test("delegated execution and consent storage boundaries are explicit", async () => {
@@ -935,23 +937,23 @@ describe("ce-code-review-beta contract", () => {
       "plugins/compound-engineering/skills/ce-code-review-beta/references/codex-delegation-workflow.md",
     )
 
-    expect(content).not.toMatch(/cat "\$top\/\.compound-engineering\/config\.local\.yaml"/)
-    const configCommand = preResolutionCommandAfter(content, "**Config status (pre-resolved):**")
+    expect(workflow).not.toMatch(/cat "\$top\/\.compound-engineering\/config\.local\.yaml"/)
+    const configCommand = preResolutionCommandAfter(workflow, "**Config status (pre-resolved):**")
     expect(configCommand).toBe(
       'top=$(git rev-parse --show-toplevel 2>/dev/null || true); cfg="$top/.compound-engineering/config.local.yaml"; if [ -z "$top" ]; then echo \'__NO_CONFIG__\'; elif [ ! -e "$cfg" ]; then echo \'__NO_CONFIG__\'; elif [ -L "$top/.compound-engineering" ]; then echo \'__UNTRUSTED_CONFIG__\'; elif [ -L "$cfg" ]; then echo \'__UNTRUSTED_CONFIG__\'; elif [ ! -f "$cfg" ]; then echo \'__UNTRUSTED_CONFIG__\'; elif git -C "$top" ls-files --error-unmatch -- .compound-engineering/config.local.yaml >/dev/null 2>&1; then echo \'__UNTRUSTED_CONFIG__\'; elif git -C "$top" check-ignore -q -- .compound-engineering/config.local.yaml 2>/dev/null; then echo "__TRUSTED_CONFIG__:$cfg"; else echo \'__UNTRUSTED_CONFIG__\'; fi',
     )
     expect(configCommand).not.toMatch(/\b(cat|sed|awk|yq|python|python3|ruby|perl|node|bun)\b[^;|]*(config\.local\.yaml|\$cfg)/)
     expect(configCommand).not.toMatch(/<\s*["']?(?:[^"';|]*config\.local\.yaml|\$cfg)/)
-    expect(content).toContain("Do not read `.compound-engineering/config.local.yaml` until this integrity check passes.")
-    expect(content).toContain("Only after the check passes, read `.compound-engineering/config.local.yaml`")
-    const settingsResolution = sectionBetween(content, "### Delegation Settings Resolution", "## Quick Review Short-Circuit")
+    expect(workflow).toContain("Do not read `.compound-engineering/config.local.yaml` until this integrity check passes.")
+    expect(workflow).toContain("Only after the check passes, read `.compound-engineering/config.local.yaml`")
+    const settingsResolution = sectionBetween(workflow, "## Delegation Settings Resolution", "## Mode Interaction")
     expect(settingsResolution.indexOf("Only after the check passes, read `.compound-engineering/config.local.yaml`")).toBeGreaterThan(
       settingsResolution.indexOf("If the block above shows `__TRUSTED_CONFIG__:<path>`"),
     )
-    expect(content).not.toContain("run the same integrity check with the shell tool")
-    expect(content).toContain("matches `^[A-Za-z0-9._:/-]+$`")
-    expect(content).toContain("does not start with `-`")
-    expect(content).toContain("whitespace, quotes, backticks, semicolons, pipes, ampersands, redirects, or newlines")
+    expect(workflow).not.toContain("run the same integrity check with the shell tool")
+    expect(workflow).toContain("matches `^[A-Za-z0-9._:/-]+$`")
+    expect(workflow).toContain("does not start with `-`")
+    expect(workflow).toContain("whitespace, quotes, backticks, semicolons, pipes, ampersands, redirects, or newlines")
 
     expect(workflow).toContain("## Delegated Execution Trust Boundary")
     expect(workflow).toContain("fixed working directory at the repository root")
@@ -976,31 +978,27 @@ describe("ce-code-review-beta contract", () => {
     expect(workflow).toContain("npm/nvm wrapper scripts")
     expect(workflow).toMatch(/TTY|terminal detection/)
     expect(workflow).toContain("CODEX_BIN` must be the absolute `codex_bin` path verified by the Codex Binary Trust Check")
-    expect(workflow).toContain("Refuse to read or write the config if `.compound-engineering/config.local.yaml` is a symlink")
-    expect(workflow).toContain("Verify `.compound-engineering/config.local.yaml` is covered by `.gitignore`")
+    expect(workflow).toContain("The script verifies symlink rejection, regular-file requirement, gitignore coverage")
     expect(workflow).toContain("**0b. Self-Review Prompt Integrity Gate**")
     expect(workflow).toContain("self-review-prompt-integrity")
     expect(workflow).toContain("plugins/compound-engineering/skills/ce-code-review-beta/")
     expect(workflow).toContain("delegated Codex reviewers must not source prompt/persona instructions from the same diff they are reviewing")
-    const stage3c = sectionBetween(content, "### Stage 3c: Declare delegated persona file mapping", "### Stage 4: Spawn sub-agents")
-    const spawning = sectionBetween(content, "#### Spawning", "**JSON return contract")
+    const stage3c = sectionBetween(workflow, "## Persona File Mapping", "## Model Override")
+    const spawning = sectionBetween(content, "#### Spawning", "**Bounded parallel dispatch")
     expect(stage3c).toContain("Do not read persona files in this stage")
-    expect(stage3c).toContain("After Stage 4 partitioning and after the Self-Review Prompt Integrity Gate passes")
+    expect(stage3c).toContain("Read each mapped persona file only after Stage 4 partitioning")
     expect(spawning).toContain("run this built-in gate before reading `references/codex-delegation-workflow.md`")
     expect(spawning).toContain("before reading any delegated persona file")
     expect(spawning.indexOf("run this built-in gate")).toBeLessThan(
       spawning.indexOf("read `references/codex-delegation-workflow.md`"),
     )
-    expect(spawning.indexOf("run this built-in gate")).toBeLessThan(
-      spawning.indexOf("resolve each delegated persona from the Stage 3c mapping"),
-    )
-    expect(workflow).toContain("Before writing consent")
+    expect(workflow).toContain("resolve each delegated persona from the Stage 3c mapping")
     const acceptance = sectionBetween(workflow, "On acceptance:", "On decline:")
-    const checksPassIndex = acceptance.indexOf("Only after those checks pass, write `review_delegate_consent: true`")
-    expect(checksPassIndex).toBeGreaterThan(acceptance.indexOf("Before writing consent"))
-    expect(checksPassIndex).toBeGreaterThan(acceptance.indexOf("Refuse to read or write the config"))
-    expect(checksPassIndex).toBeGreaterThan(acceptance.indexOf("Verify `.compound-engineering/config.local.yaml`"))
-    expect(acceptance.slice(0, checksPassIndex)).not.toContain("review_delegate_consent: true")
+    expect(acceptance).toContain('Run `bash scripts/integrity-check-config.sh "$REPO_ROOT"`')
+    const okIndex = acceptance.indexOf("On `OK:<absolute-config-path>`, write `review_delegate_consent: true`")
+    expect(okIndex).toBeGreaterThan(acceptance.indexOf("The script verifies symlink rejection"))
+    expect(acceptance).toContain("On `ABSENT`, the file does not exist yet")
+    expect(acceptance).toContain("On `ERROR:<reason>`, do not write consent")
     expect(workflow).not.toContain("cd \"<repo-root>\" || exit 1")
     expect(workflow).not.toContain('--cd "<repo-root>"')
     const dispatchLoop = sectionBetween(workflow, "## Dispatch Loop", "**Step A — Launch")
@@ -1051,8 +1049,8 @@ describe("ce-code-review-beta contract", () => {
     expect(workflow).toContain("Mark `ignore_late_results: true`")
     expect(workflow).toContain("Late result files from ignored reviewers must never be merged")
     expect(workflow).toContain("delete `<scratch-dir>/codex-home/auth.json`")
-    expect(workflow).toContain("cancel or terminate every pending launched delegated process")
-    expect(workflow).toContain("re-dispatch every not-yet-launched delegated reviewer")
+    expect(workflow).toContain("Cancel or terminate every pending launched delegated process")
+    expect(workflow).toContain("Re-dispatch every not-yet-launched delegated reviewer")
     expect(workflow).toContain("checks the recorded background process/session handle and the `<scratch-dir>/exit-<reviewer-name>.code` sentinel")
     expect(workflow).toContain("classify the reviewer as CLI failure immediately; do not wait for the full timeout")
     const stepB = sectionBetween(workflow, "**Step B — Poll", "## Result Classification")
@@ -1104,7 +1102,7 @@ describe("ce-code-review-beta contract", () => {
     expect(workflow).not.toContain("{diff}")
     expect(workflow).toContain("If a pending process cannot be terminated")
     expect(workflow).toContain("do not redispatch it locally in the same run")
-    expect(workflow).toContain("re-dispatch every not-yet-launched delegated reviewer")
+    expect(workflow).toContain("Re-dispatch every not-yet-launched delegated reviewer")
   })
 
   test("compact split must validate-then-write-full before stripping detail-tier fields", async () => {
@@ -1117,9 +1115,7 @@ describe("ce-code-review-beta contract", () => {
     expect(workflow).toContain("never reverse")
     expect(workflow).toContain("silent failure mode")
     expect(workflow).toMatch(/validate.*write.*strip.*merge/i)
-    // SKILL.md must restate the same ordering rule so the imperative lands at the
-    // point of action even when the workflow reference is not loaded.
-    expect(skill).toContain("Never reverse this order")
+    expect(skill).toContain("references/codex-delegation-workflow.md#json-return-contract")
   })
 
   test("circuit breaker trips after 3 consecutive failures and redispatches locally", async () => {
@@ -1248,7 +1244,7 @@ describe("ce-code-review-beta delegation hardening (post-review)", () => {
     const workflow = await readRepoFile(
       "plugins/compound-engineering/skills/ce-code-review-beta/references/codex-delegation-workflow.md",
     )
-    expect(content).toContain("review_delegate_max_parallel")
+    expect(content).toContain("references/codex-delegation-workflow.md#delegation-settings-resolution")
     expect(workflow).toContain("review_delegate_max_parallel")
     // Cap must enforce wave-based scheduling, not silent unbounded fan-out
     expect(workflow.toLowerCase()).toMatch(/wave|cap|parallel-launch/)
