@@ -623,8 +623,11 @@ Do not include time estimates.
 
 In `mode:headless`, replace the interactive pipe-delimited table report with a structured text envelope. The envelope follows the same structural pattern as document-review's headless output (completion header, metadata block, findings grouped by autofix_class, trailing sections) while using ce-code-review's own section headings and per-finding fields.
 
+**Formatting rule:** The `Skill: ce-code-review` line immediately after the completion header is the stable skill discriminator for programmatic callers.
+
 ```
 Code review complete (headless mode).
+Skill: ce-code-review
 
 Scope: <scope-line>
 Intent: <intent-summary>

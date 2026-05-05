@@ -40,6 +40,9 @@ describe("ce-code-review contract", () => {
     // Structured output format
     expect(content).toContain("### Headless output format")
     expect(content).toContain("Code review complete (headless mode).")
+    expect(content).toContain("Skill: ce-code-review")
+    expect(content).toMatch(/Code review complete \(headless mode\)\.\nSkill: ce-code-review/)
+    expect(content).toContain("stable skill discriminator for programmatic callers")
     expect(content).toContain('"Review complete" as the terminal signal')
 
     // Applies safe_auto fixes but NOT safe for concurrent use
