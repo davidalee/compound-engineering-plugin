@@ -676,17 +676,19 @@ describe("ce-code-review contract", () => {
     expect(content).toContain('echo "ERROR: Unable to resolve PR base branch')
 
     // Branch and standalone modes delegate to resolve-base.sh from the harness-exposed
-    // plugin or skill directory and check its ERROR: output. The script itself emits
-    // ERROR: when the base is unresolved.
+    // skill directory and check its ERROR: output. The script itself emits ERROR: when
+    // the base is unresolved.
     expect(content).toContain('"${CLAUDE_SKILL_DIR:-}"')
-    expect(content).toContain('"${CLAUDE_PLUGIN_ROOT:+${CLAUDE_PLUGIN_ROOT}/skills/ce-code-review}"')
-    expect(content).toContain('[ -f "$base/scripts/resolve-base.sh" ]')
+    expect(content).toContain('[ -f "${CLAUDE_SKILL_DIR}/scripts/resolve-base.sh" ]')
     // No bare relative-path fallback to `scripts/resolve-base.sh` -- that would resolve
     // against the reviewed repo's CWD and could execute a repo-controlled script.
     expect(content).not.toContain('RESOLVE_SCRIPT="scripts/resolve-base.sh"')
     expect(content).not.toMatch(/bash\s+scripts\/resolve-base\.sh/)
+    // No CLAUDE_PLUGIN_ROOT fallback -- AGENTS.md documents CLAUDE_SKILL_DIR as the
+    // canonical primitive for skill-bundled scripts; adding a second variable is bloat.
+    expect(content).not.toContain("CLAUDE_PLUGIN_ROOT")
     expect(content).toContain(
-      "Re-run with `base:<ref>` or use a harness that exposes the plugin/skill directory.",
+      "Re-run with `base:<ref>` or use a harness that exposes the skill directory.",
     )
     const resolveScript = await readRepoFile(
       "plugins/compound-engineering/skills/ce-code-review/scripts/resolve-base.sh",
@@ -695,26 +697,22 @@ describe("ce-code-review contract", () => {
 
     // Branch and standalone modes must stop on script error, not fall back
     expect(content).toContain(
-      "If the plugin/skill directory is unavailable, the helper script is missing, or the script outputs an error, stop instead of falling back to `git diff HEAD`",
+      "is unavailable or resolves inside the reviewed repo, the helper script is missing, or the script outputs an error, stop instead of falling back to `git diff HEAD`",
     )
   })
 
-  test("resolve-base probe rejects repo-controlled paths and preserves fallback order", async () => {
+  test("resolve-base probe resolves CLAUDE_SKILL_DIR and rejects repo-controlled paths", async () => {
     const content = await readRepoFile("plugins/compound-engineering/skills/ce-code-review/SKILL.md")
     const snippet = extractResolveProbe(content)
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "ce-code-review-contract-"))
 
     try {
       const skillDir = path.join(tempDir, "skill-dir")
-      const pluginRoot = path.join(tempDir, "plugin-root")
-      const missingSkillDir = path.join(tempDir, "missing-skill-dir")
       const evilCwd = path.join(tempDir, "evil-cwd")
       const evilSkillDir = path.join(evilCwd, ".evil")
 
       for (const dir of [
         path.join(skillDir, "scripts"),
-        path.join(pluginRoot, "skills", "ce-code-review", "scripts"),
-        missingSkillDir,
         path.join(evilCwd, "scripts"),
         path.join(evilSkillDir, "scripts"),
       ]) {
@@ -722,66 +720,36 @@ describe("ce-code-review contract", () => {
       }
 
       fs.writeFileSync(path.join(skillDir, "scripts", "resolve-base.sh"), "echo BASE:from-skill-dir\n")
-      fs.writeFileSync(
-        path.join(pluginRoot, "skills", "ce-code-review", "scripts", "resolve-base.sh"),
-        "echo BASE:from-plugin-root\n",
-      )
       fs.writeFileSync(path.join(evilCwd, "scripts", "resolve-base.sh"), "echo BASE:from-cwd-evil\n")
       fs.writeFileSync(path.join(evilSkillDir, "scripts", "resolve-base.sh"), "echo BASE:from-cwd-evil\n")
 
       const realSkillDir = fs.realpathSync(skillDir)
-      const realPluginRoot = fs.realpathSync(pluginRoot)
-      const realMissingSkillDir = fs.realpathSync(missingSkillDir)
       const realEvilSkillDir = fs.realpathSync(evilSkillDir)
       const realEvilCwd = fs.realpathSync(evilCwd)
       const skillResolveScript = path.join(realSkillDir, "scripts", "resolve-base.sh")
-      const pluginResolveScript = path.join(
-        realPluginRoot,
-        "skills",
-        "ce-code-review",
-        "scripts",
-        "resolve-base.sh",
-      )
 
+      // Unset: must fail closed, never fall through to the reviewed-repo decoy
       const unset = runResolveProbe(snippet, realEvilCwd, {})
       expect(unset.status).not.toBe(0)
       expect(unset.output).toContain("Re-run with `base:<ref>`")
+      expect(unset.output).not.toContain("from-cwd-evil")
 
-      expect(runResolveProbe(snippet, realEvilCwd, { CLAUDE_SKILL_DIR: realSkillDir }).output).toContain(
-        `RESOLVED:${skillResolveScript}`,
-      )
+      // Empty: same fail-closed behavior
+      const empty = runResolveProbe(snippet, realEvilCwd, { CLAUDE_SKILL_DIR: "" })
+      expect(empty.status).not.toBe(0)
+      expect(empty.output).toContain("Re-run with `base:<ref>`")
 
-      expect(runResolveProbe(snippet, realEvilCwd, { CLAUDE_PLUGIN_ROOT: realPluginRoot }).output).toContain(
-        `RESOLVED:${pluginResolveScript}`,
-      )
-
+      // Happy path: resolves to the bundled helper, even with a decoy in the CWD
       expect(
-        runResolveProbe(snippet, realEvilCwd, {
-          CLAUDE_SKILL_DIR: realSkillDir,
-          CLAUDE_PLUGIN_ROOT: realPluginRoot,
-        }).output,
+        runResolveProbe(snippet, realEvilCwd, { CLAUDE_SKILL_DIR: realSkillDir }).output,
       ).toContain(`RESOLVED:${skillResolveScript}`)
 
-      expect(
-        runResolveProbe(snippet, realEvilCwd, {
-          CLAUDE_SKILL_DIR: realEvilSkillDir,
-          CLAUDE_PLUGIN_ROOT: realPluginRoot,
-        }).output,
-      ).toContain(`RESOLVED:${pluginResolveScript}`)
-
-      expect(
-        runResolveProbe(snippet, realEvilCwd, {
-          CLAUDE_SKILL_DIR: "",
-          CLAUDE_PLUGIN_ROOT: realPluginRoot,
-        }).output,
-      ).toContain(`RESOLVED:${pluginResolveScript}`)
-
-      expect(
-        runResolveProbe(snippet, realEvilCwd, {
-          CLAUDE_SKILL_DIR: realMissingSkillDir,
-          CLAUDE_PLUGIN_ROOT: realPluginRoot,
-        }).output,
-      ).toContain(`RESOLVED:${pluginResolveScript}`)
+      // Hostile harness: CLAUDE_SKILL_DIR points inside the reviewed-repo CWD --
+      // must be rejected and fail closed, NOT execute the decoy.
+      const evil = runResolveProbe(snippet, realEvilCwd, { CLAUDE_SKILL_DIR: realEvilSkillDir })
+      expect(evil.status).not.toBe(0)
+      expect(evil.output).toContain("Re-run with `base:<ref>`")
+      expect(evil.output).not.toContain("from-cwd-evil")
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true })
     }
