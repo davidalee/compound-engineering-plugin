@@ -1,10 +1,54 @@
-import { readFile } from "fs/promises"
-import path from "path"
+import { execSync } from "node:child_process"
+import fs from "node:fs"
+import os from "node:os"
+import path from "node:path"
+import { readFile } from "node:fs/promises"
 import { describe, expect, test } from "bun:test"
 import { parseFrontmatter } from "../src/utils/frontmatter"
 
 async function readRepoFile(relativePath: string): Promise<string> {
   return readFile(path.join(process.cwd(), relativePath), "utf8")
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", "'\\''")}'`
+}
+
+function runResolveProbe(snippet: string, cwd: string, env: NodeJS.ProcessEnv) {
+  try {
+    return {
+      status: 0,
+      output: execSync(`bash -c ${shellQuote(snippet)}`, {
+        cwd,
+        env: {
+          PATH: process.env.PATH,
+          ...env,
+        },
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+      }),
+    }
+  } catch (error) {
+    const failed = error as { status?: number; stdout?: Buffer | string; stderr?: Buffer | string }
+    return {
+      status: failed.status ?? 1,
+      output: `${failed.stdout?.toString() ?? ""}${failed.stderr?.toString() ?? ""}`,
+    }
+  }
+}
+
+function extractResolveProbe(content: string): string {
+  const blocks = content.match(
+    /RESOLVE_SCRIPT=""\n[\s\S]*?BASE=\$\(echo "\$RESOLVE_OUT" \| sed 's\/\^BASE:\/\/'\)/g,
+  )
+
+  expect(blocks).toHaveLength(2)
+  expect(blocks?.[0]).toBe(blocks?.[1])
+
+  return blocks![0].replace(
+    `BASE=$(echo "$RESOLVE_OUT" | sed 's/^BASE://')`,
+    `echo "RESOLVED:$RESOLVE_SCRIPT"`,
+  )
 }
 
 describe("ce-code-review contract", () => {
@@ -631,9 +675,21 @@ describe("ce-code-review contract", () => {
     // PR mode still has an inline error for unresolved base
     expect(content).toContain('echo "ERROR: Unable to resolve PR base branch')
 
-    // Branch and standalone modes delegate to resolve-base.sh and check its ERROR: output.
-    // The script itself emits ERROR: when the base is unresolved.
-    expect(content).toContain("scripts/resolve-base.sh")
+    // Branch and standalone modes delegate to resolve-base.sh from the harness-exposed
+    // skill directory and check its ERROR: output. The script itself emits ERROR: when
+    // the base is unresolved.
+    expect(content).toContain('"${CLAUDE_SKILL_DIR:-}"')
+    expect(content).toContain('[ -f "${CLAUDE_SKILL_DIR}/scripts/resolve-base.sh" ]')
+    // No bare relative-path fallback to `scripts/resolve-base.sh` -- that would resolve
+    // against the reviewed repo's CWD and could execute a repo-controlled script.
+    expect(content).not.toContain('RESOLVE_SCRIPT="scripts/resolve-base.sh"')
+    expect(content).not.toMatch(/bash\s+scripts\/resolve-base\.sh/)
+    // No CLAUDE_PLUGIN_ROOT fallback -- AGENTS.md documents CLAUDE_SKILL_DIR as the
+    // canonical primitive for skill-bundled scripts; adding a second variable is bloat.
+    expect(content).not.toContain("CLAUDE_PLUGIN_ROOT")
+    expect(content).toContain(
+      "Re-run with `base:<ref>` or use a harness that exposes the skill directory.",
+    )
     const resolveScript = await readRepoFile(
       "plugins/compound-engineering/skills/ce-code-review/scripts/resolve-base.sh",
     )
@@ -641,8 +697,62 @@ describe("ce-code-review contract", () => {
 
     // Branch and standalone modes must stop on script error, not fall back
     expect(content).toContain(
-      "If the script outputs an error, stop instead of falling back to `git diff HEAD`",
+      "is unavailable or resolves inside the reviewed repo, the helper script is missing, or the script outputs an error, stop instead of falling back to `git diff HEAD`",
     )
+  })
+
+  test("resolve-base probe resolves CLAUDE_SKILL_DIR and rejects repo-controlled paths", async () => {
+    const content = await readRepoFile("plugins/compound-engineering/skills/ce-code-review/SKILL.md")
+    const snippet = extractResolveProbe(content)
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "ce-code-review-contract-"))
+
+    try {
+      const skillDir = path.join(tempDir, "skill-dir")
+      const evilCwd = path.join(tempDir, "evil-cwd")
+      const evilSkillDir = path.join(evilCwd, ".evil")
+
+      for (const dir of [
+        path.join(skillDir, "scripts"),
+        path.join(evilCwd, "scripts"),
+        path.join(evilSkillDir, "scripts"),
+      ]) {
+        fs.mkdirSync(dir, { recursive: true })
+      }
+
+      fs.writeFileSync(path.join(skillDir, "scripts", "resolve-base.sh"), "echo BASE:from-skill-dir\n")
+      fs.writeFileSync(path.join(evilCwd, "scripts", "resolve-base.sh"), "echo BASE:from-cwd-evil\n")
+      fs.writeFileSync(path.join(evilSkillDir, "scripts", "resolve-base.sh"), "echo BASE:from-cwd-evil\n")
+
+      const realSkillDir = fs.realpathSync(skillDir)
+      const realEvilSkillDir = fs.realpathSync(evilSkillDir)
+      const realEvilCwd = fs.realpathSync(evilCwd)
+      const skillResolveScript = path.join(realSkillDir, "scripts", "resolve-base.sh")
+
+      // Unset: must fail closed, never fall through to the reviewed-repo decoy
+      const unset = runResolveProbe(snippet, realEvilCwd, {})
+      expect(unset.status).not.toBe(0)
+      expect(unset.output).toContain("Re-run with `base:<ref>`")
+      expect(unset.output).not.toContain("from-cwd-evil")
+
+      // Empty: same fail-closed behavior
+      const empty = runResolveProbe(snippet, realEvilCwd, { CLAUDE_SKILL_DIR: "" })
+      expect(empty.status).not.toBe(0)
+      expect(empty.output).toContain("Re-run with `base:<ref>`")
+
+      // Happy path: resolves to the bundled helper, even with a decoy in the CWD
+      expect(
+        runResolveProbe(snippet, realEvilCwd, { CLAUDE_SKILL_DIR: realSkillDir }).output,
+      ).toContain(`RESOLVED:${skillResolveScript}`)
+
+      // Hostile harness: CLAUDE_SKILL_DIR points inside the reviewed-repo CWD --
+      // must be rejected and fail closed, NOT execute the decoy.
+      const evil = runResolveProbe(snippet, realEvilCwd, { CLAUDE_SKILL_DIR: realEvilSkillDir })
+      expect(evil.status).not.toBe(0)
+      expect(evil.output).toContain("Re-run with `base:<ref>`")
+      expect(evil.output).not.toContain("from-cwd-evil")
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true })
+    }
   })
 
   test("orchestration callers pass explicit mode flags", async () => {
