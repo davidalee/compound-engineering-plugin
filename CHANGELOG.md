@@ -1,5 +1,40 @@
 # Changelog
 
+## [3.6.1](https://github.com/EveryInc/compound-engineering-plugin/compare/cli-v3.6.0...cli-v3.6.1) (2026-05-06)
+
+
+### Bug Fixes
+
+* **doc-review:** cut review noise on plans, scope personas to doc shape ([#780](https://github.com/EveryInc/compound-engineering-plugin/issues/780)) ([8349e75](https://github.com/EveryInc/compound-engineering-plugin/commit/8349e750b856d267b74fbbeb2fb135e4ff73eb91))
+
+## [3.6.0](https://github.com/EveryInc/compound-engineering-plugin/compare/cli-v3.5.0...cli-v3.6.0) (2026-05-05)
+
+
+### Features
+
+* convert hooks to .codex/hooks.json for Codex target ([#742](https://github.com/EveryInc/compound-engineering-plugin/issues/742)) ([60b66dd](https://github.com/EveryInc/compound-engineering-plugin/commit/60b66dd904c3a81e0a25dd3bc61e2d94d8837f86))
+
+
+### Bug Fixes
+
+* **ce-plan:** render Implementation Units as headings, not bulleted list items ([#766](https://github.com/EveryInc/compound-engineering-plugin/issues/766)) ([be2efd7](https://github.com/EveryInc/compound-engineering-plugin/commit/be2efd7d7605c483ea9f068c6190b81a9d68e942))
+* **ce-worktree:** resolve script path against skill dir, not user CWD ([#772](https://github.com/EveryInc/compound-engineering-plugin/issues/772)) ([4cc1ee6](https://github.com/EveryInc/compound-engineering-plugin/commit/4cc1ee6fe2a353cd0b8e7466ec27e9556b042ee3))
+
+## [3.5.0](https://github.com/EveryInc/compound-engineering-plugin/compare/cli-v3.4.2...cli-v3.5.0) (2026-05-04)
+
+
+### Features
+
+* **riffrec-feedback-analysis:** add Riffrec feedback skill with three-path routing ([#747](https://github.com/EveryInc/compound-engineering-plugin/issues/747)) ([dde9256](https://github.com/EveryInc/compound-engineering-plugin/commit/dde9256362db90606d052c662dc8f2f0ae6b620b))
+
+## [3.4.2](https://github.com/EveryInc/compound-engineering-plugin/compare/cli-v3.4.1...cli-v3.4.2) (2026-05-04)
+
+
+### Bug Fixes
+
+* **ce-code-review:** keep finding numbers stable ([#754](https://github.com/EveryInc/compound-engineering-plugin/issues/754)) ([e856756](https://github.com/EveryInc/compound-engineering-plugin/commit/e8567566b7ed779ea1964d6ffe97e8cb4ca79d73))
+* **ce-compound, ce-sessions:** remove bash parameter expansion from ! backtick  ([#752](https://github.com/EveryInc/compound-engineering-plugin/issues/752)) ([9539bf0](https://github.com/EveryInc/compound-engineering-plugin/commit/9539bf045deba099a20d306b2b118e3b019c633c))
+
 ## [3.4.1](https://github.com/EveryInc/compound-engineering-plugin/compare/cli-v3.4.0...cli-v3.4.1) (2026-05-01)
 
 
