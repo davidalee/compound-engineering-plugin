@@ -11,6 +11,13 @@
 # work_delegate_model: gpt-5.4   # any valid codex model (omit to use ~/.codex/config.toml default)
 # work_delegate_effort: high     # minimal | low | medium | high | xhigh (omit to use ~/.codex/config.toml default)
 
+# --- LFG pipeline (autonomous full-feature workflow) ---
+# Tokens on the /lfg invocation override these (delegate:codex|delegate:local, mcp:perplexity,codex).
+
+# lfg_delegate: codex                  # codex | false (default: false). When codex, step 2 routes to ce-work-beta with delegate:codex.
+# lfg_mcp_providers: perplexity,codex  # comma-separated list of MCP/agent providers to auto-invoke at appropriate phases. Recognized: codex (delegation+adversarial), perplexity (research hint). Unknown names accepted but no-op.
+# lfg_adversarial_review: true         # true (default) | false. When true and codex MCP is loaded, runs a parallel codex-MCP adversarial review lane alongside ce-code-review.
+
 # --- Product pulse ---
 # Settings written by /ce-product-pulse first-run interview. Re-run the skill with
 # argument `setup` or `reconfigure` to edit interactively.
