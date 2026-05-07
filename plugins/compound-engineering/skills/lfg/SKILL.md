@@ -1,6 +1,6 @@
 ---
 name: lfg
-description: Full autonomous engineering workflow with optional delegation to Codex CLI/MCP and configurable MCP/agent providers (e.g. perplexity)
+description: Full autonomous engineering workflow with optional delegation to Codex CLI and configurable MCP/agent providers (e.g. perplexity)
 argument-hint: "[feature description] [delegate:codex|delegate:local] [mcp:perplexity,codex]"
 disable-model-invocation: true
 ---
@@ -11,7 +11,7 @@ When invoking any skill referenced below, resolve its name against the available
 
 ## Tokens & Config
 
-Parse `$ARGUMENTS` for the following optional tokens. Strip each recognized token before treating the remainder as the feature description that gets passed to `ce-plan`.
+Parse `$ARGUMENTS` for the following optional tokens. Strip each recognized token before treating the remainder as `feature_description` (passed to `ce-plan`).
 
 | Token | Example | Effect |
 |-------|---------|--------|
@@ -19,8 +19,16 @@ Parse `$ARGUMENTS` for the following optional tokens. Strip each recognized toke
 | `delegate:local` | `delegate:local` | Force the work phase to use `ce-work` even if config enables delegation |
 | `mcp:<list>` | `mcp:perplexity,codex` | Comma-separated list of MCP/agent provider names to auto-invoke at appropriate phases |
 
-**Fuzzy activation:** Imperative phrases such as "use codex", "delegate to codex", "codex mode" count as `delegate:codex`. A bare mention of "codex" inside the feature description (e.g., "fix codex converter bugs") must NOT activate delegation.
-**Fuzzy deactivation:** "no codex", "local mode", "standard mode" count as `delegate:local`.
+### Token normalization
+
+- **Case:** lowercase before matching. `Delegate:Codex` and `MCP:Perplexity` are valid.
+- **Empty `mcp:`:** an `mcp:` token with no list (or only whitespace/commas) sets `mcp_providers=[]` from the argument source.
+- **Whitespace and stray commas:** split the list on commas, trim each entry, drop empties. `mcp:perplexity, codex` → `["perplexity","codex"]`. `mcp:,perplexity,` → `["perplexity"]`.
+- **Repeated `delegate:*` tokens:** last token wins.
+- **Unknown delegate value** (e.g., `delegate:gemini`): ignore the token and continue with config/default. Emit a one-line notice.
+- **Bare mention of "codex" inside `feature_description`** (e.g., `fix codex converter bugs`) does NOT activate delegation — only the explicit `delegate:codex` token, or one of the imperative phrases below, counts.
+- **Fuzzy activation:** `use codex`, `delegate to codex`, `codex mode` count as `delegate:codex`. Examples — fires: "fix the bug, use codex". Does not fire: "fix codex converter bugs".
+- **Fuzzy deactivation:** `no codex`, `local mode`, `standard mode` count as `delegate:local`.
 
 ### Config (pre-resolved)
 
@@ -35,10 +43,11 @@ Config keys:
 
 ### Settings Resolution
 
-Resolve in this precedence:
-1. **Argument tokens** — `delegate:*` and `mcp:*` from this invocation (highest priority)
-2. **Config file** — keys above
-3. **Hard defaults** — `delegation_active=false`, `mcp_providers=[]`, `adversarial_review_active=true`
+For `delegation_active` and `adversarial_review_active`, argument tokens override config; config overrides hard defaults.
+
+For `mcp_providers`, the argument list and config list are **unioned** (deduped, lowercased), since they declaratively name available helpers rather than mutually exclusive choices. To exclude a provider that config enables, pass `mcp:none` — this clears the list from the argument source and yields an empty `mcp_providers` regardless of config.
+
+Hard defaults: `delegation_active=false`, `mcp_providers=[]`, `adversarial_review_active=true`.
 
 ### Capability detection (pre-resolved)
 
@@ -48,80 +57,83 @@ Tool-availability checks for MCP providers happen at runtime: before invoking `m
 
 Store the resolved state for downstream consumption:
 - `delegation_active` — boolean
-- `delegation_source` — `argument` | `config` | `default`
 - `codex_cli_available` — boolean (from the capability probe above)
 - `codex_mcp_available` — boolean (from runtime tool list inspection)
-- `mcp_providers` — list of lowercase provider names, deduped, after merging argument and config sources
+- `mcp_providers` — list of lowercase provider names, deduped, after unioning argument and config sources
 - `adversarial_review_active` — boolean
+- `adversarial_review_source` — `argument` | `config` | `default` (used to decide notice verbosity)
 - `feature_description` — `$ARGUMENTS` with all recognized tokens stripped
 
-If `delegation_active` is true but neither `codex_cli_available` nor `codex_mcp_available` is true, set `delegation_active=false` and emit: `Delegation requested but neither codex CLI nor codex MCP is available — falling back to ce-work.`
+If `delegation_active` is true and `codex_cli_available` is false, set `delegation_active=false` and emit: `Delegation requested but codex CLI is not on PATH — falling back to ce-work.` (`ce-work-beta` delegates via `codex exec` only; codex MCP is NOT used as a work-phase fallback. The codex MCP is used only as the parallel adversarial review lane in the review phase below.)
 
 ---
 
 ## Pipeline
 
-1. Invoke the `ce-plan` skill with `feature_description`, prepending the line `mcp_hint:perplexity` to the argument string only when `perplexity` is in `mcp_providers` AND the perplexity MCP is loaded. The hint signals that perplexity is the preferred external-research surface for this run; `ce-plan` already runs its own research phase and uses the hint to bias tool selection.
+1. Invoke the `ce-plan` skill with `feature_description`, prepending `mcp_hint:perplexity` to the argument string when `perplexity` is in `mcp_providers` AND the perplexity MCP is loaded. The hint signals that perplexity is the preferred external-research surface for this run; `ce-plan` already runs its own research phase and uses the hint to bias tool selection.
 
-   GATE: STOP. If ce-plan reported the task is non-software and cannot be processed in pipeline mode, stop the pipeline and inform the user that LFG requires software tasks. Otherwise, verify that the `ce-plan` workflow produced a plan file in `docs/plans/`. If no plan file was created, invoke `ce-plan` again with the same arguments. Do NOT proceed to step 2 until a written plan exists. **Record the plan file path** — it will be passed to ce-code-review in step 3.
+   GATE: STOP. If ce-plan reported the task is non-software and cannot be processed in pipeline mode, stop the pipeline and inform the user that LFG requires software tasks. Otherwise, verify that the `ce-plan` workflow produced a plan file in `docs/plans/`. If no plan file was created, invoke `ce-plan` again with `feature_description`. Do NOT proceed to step 2 until a written plan exists. **Record the plan file path** — it will be passed to ce-code-review in step 3.
 
 2. Invoke the work skill, branching on resolved delegation state:
 
-   - If `delegation_active` is true: invoke the `ce-work-beta` skill with arguments `<plan-path> delegate:codex`, prepending `mcp_hint:perplexity` when perplexity is in `mcp_providers` AND loaded. `ce-work-beta` owns its own CLI/MCP fallback per its codex-delegation workflow.
+   - If `delegation_active` is true: invoke the `ce-work-beta` skill with arguments `<plan-path> delegate:codex`, prepending `mcp_hint:perplexity` when perplexity is in `mcp_providers` AND loaded. `ce-work-beta` delegates via `codex exec` (CLI). If the CLI is missing it disables delegation internally and runs locally — that fallback path is owned by `ce-work-beta` and is the canonical source of truth for delegation behavior.
    - Else: invoke the `ce-work` skill with `<plan-path>`.
 
-   Log the chosen branch in one line so the run record reflects the decision (`Work phase: ce-work-beta (delegate:codex)` or `Work phase: ce-work`).
+   Log the chosen branch in one line (`Work phase: ce-work-beta (delegate:codex)` or `Work phase: ce-work`).
 
    GATE: STOP. Verify that implementation work was performed — files were created or modified beyond the plan. Do NOT proceed to step 3 if no code changes were made.
 
-3. Invoke the `ce-code-review` skill with `mode:autofix plan:<plan-path-from-step-1>`.
+3. **Review phase — dispatch both lanes in a single response so they execute in parallel.**
 
-   Pass the plan file path from step 1 so ce-code-review can verify requirements completeness. Read the Residual Actionable Work summary the skill emits.
+   Two lanes:
 
-3b. **Parallel Codex-MCP adversarial review** (run only when `adversarial_review_active` is true AND (`codex` is in `mcp_providers` OR `codex_mcp_available` is true)).
+   - **Claude lane:** invoke the `ce-code-review` skill with `mode:autofix plan:<plan-path-from-step-1>`. Pass the plan file path so ce-code-review can verify requirements completeness.
+   - **Codex MCP adversarial lane:** runs only when `adversarial_review_active` is true AND `codex_mcp_available` is true (the runtime tool-list check from the capability section). When the gate is closed, dispatch only the Claude lane and emit one notice. **Suppress the notice when the gate closes solely because `adversarial_review_active` was default-derived AND codex MCP is unavailable** — that combination means the user did not explicitly enable the lane, so the skip is silent. Otherwise emit `Codex adversarial lane skipped: <reason>`.
 
-   This lane runs in parallel with step 3. Both calls go in the same response so they execute concurrently.
+   To dispatch in parallel, place both calls (the `ce-code-review` skill invocation AND the `mcp__codex__codex` invocation) in the same agent response — most platforms execute parallel tool calls concurrently.
 
+   **Composing the codex MCP call:**
    1. Create an OS-temp scratch dir for this run: `mktemp -d -t lfg-codex-adv-XXXXXX`. Capture the absolute path.
    2. Read `references/codex-adversarial-prompt.md` for the prompt template and findings JSON schema.
-   3. Compose the prompt by splicing in the plan path, the diff (`git diff <base>...HEAD`), and the schema instruction.
+   3. Compose the prompt by splicing in the plan path, the diff (`git diff <base>...HEAD`), and the schema instruction. The prompt itself instructs codex to analyze only and return JSON — it must not modify any files.
    4. Invoke `mcp__codex__codex` with that prompt.
-   5. After both step 3 and step 3b return:
-      - Parse codex-MCP output as JSON. If parsing fails, record a single residual entry titled "codex adversarial returned unparseable output" tagged `source: codex-adversarial` and continue.
-      - For each finding with `autofixable: true`, apply the suggested fix via Edit. **Serialize these Edits to run after `ce-code-review`'s autofix returns** to avoid concurrent writes to the same file.
-      - For each finding with `autofixable: false` OR `confidence: low` OR `requires_human_judgment: true`, append to the residual list with the original `source: codex-adversarial` tag and the original confidence/judgment fields preserved.
-   6. If codex MCP times out or errors, record a single residual ("codex adversarial unavailable: <reason>") and continue. Never abort the pipeline.
 
-   If `adversarial_review_active` is false or codex MCP is unavailable, skip 3b silently with a one-line notice (`Codex adversarial lane skipped: <reason>`).
+   **After both lanes return:**
+   - Read `ce-code-review`'s Residual Actionable Work summary.
+   - Parse codex-MCP output as JSON. If parsing fails, record a single residual entry titled `codex adversarial returned unparseable output` tagged `source: codex-adversarial`, `severity: low`, `owner: downstream-resolver` and continue.
+   - For each codex finding with `autofixable: true`, apply `suggested_fix` via Edit. **Serialize these Edits to run after `ce-code-review`'s autofix returns** to avoid concurrent writes to the same file.
+   - For each codex finding with `autofixable: false` OR `confidence: low` OR `requires_human_judgment: true`, append it to the residual list. Synthesize the fields the residual handoff (step 5) expects: `owner: downstream-resolver`, `source: codex-adversarial`, `autofix_class: manual` (or `gated_auto` when `suggested_fix` is non-empty but `requires_human_judgment` is true). Preserve `confidence`, `requires_human_judgment`, `severity`, `file`, `line`, `title`, `body`, and `suggested_fix` on the finding object so step 5 can render them.
+   - If codex MCP times out or errors, record a single residual (`codex adversarial unavailable: <reason>`, `severity: low`, `owner: downstream-resolver`) and continue. Never abort the pipeline.
 
-4. **Persist review autofixes** (REQUIRED after steps 3 and 3b, before residual handoff)
+4. **Persist review autofixes** (REQUIRED after step 3, before residual handoff)
 
-   Check `git status --short`. If autofix from step 3 OR step 3b changed files, stage only those review-fix files, commit them with `fix(review): apply autofix feedback`, and push the current branch before continuing. If an upstream exists, run `git push`. If no upstream exists, resolve a writable remote dynamically: prefer `origin` when present, otherwise use `git remote` and choose the first configured remote. Then run `git push --set-upstream <remote> HEAD`. Do not proceed to step 5, run browser tests, or output DONE while review autofix edits remain only in the working tree. If no files changed, explicitly note that there were no review autofixes to persist.
+   Check `git status --short`. If autofix from either lane changed files, stage only those review-fix files, commit them with `fix(review): apply autofix feedback`, and push the current branch before continuing. If an upstream exists, run `git push`. If no upstream exists, resolve a writable remote dynamically: prefer `origin` when present, otherwise use `git remote` and choose the first configured remote. Then run `git push --set-upstream <remote> HEAD`. Do not proceed to step 5, run browser tests, or output DONE while review autofix edits remain only in the working tree. If no files changed, explicitly note that there were no review autofixes to persist.
 
-5. **Autonomous residual handoff** (only when steps 3 and 3b together produced one or more residual `downstream-resolver` findings; skip when both reported `Residual actionable work: none.`)
+5. **Autonomous residual handoff** (run when step 3 produced one or more residual findings from either lane; skip when both lanes report `Residual actionable work: none.`)
 
    Do not prompt the user. This step embraces the autopilot contract: residuals must become durable before DONE, but the agent never stops to ask.
 
-   1. Load `references/tracker-defer.md` in **non-interactive mode**. Pass the merged residual actionable findings from steps 3 and 3b (or run artifacts when summaries were truncated). Preserve each finding's `source` tag (`ce-code-review` or `codex-adversarial`) so the tracker entries name the lane.
-   2. Collect the structured return: `{ filed: [...], failed: [...], no_sink: [...] }`.
-   3. Compose a `## Residual Review Findings` markdown section from the structured return:
-      - For each item in `filed`: a bullet with severity, file:line, title, source lane, and a link to the tracker ticket URL.
-      - For each item in `failed`: a bullet with severity, file:line, title, source lane, and the failure reason (e.g., `Defer failed: gh returned 401 — tracker unavailable`).
-      - For each item in `no_sink`: a bullet with severity, file:line, title, and source lane inlined verbatim so the PR body or fallback file is the durable record.
-   4. **Human-Judgment Items subsection.** If any finding (filed, failed, or no_sink) carried `confidence: low` or `requires_human_judgment: true` AND was autofixed, append a subsection titled `### Items applied with low confidence (please verify)` after the bullets above. Each entry shows: severity, file:line, title, source lane, the autofix that was applied, and a one-line reason the agent had doubt. Items where autofix was NOT applied because human decision was required stay in the failed/no_sink buckets above — do not duplicate them here. If no findings qualify, omit the subsection entirely.
-   5. Detect the current branch's open PR without prompting:
+   1. **Build the merged residual list.** Combine `ce-code-review`'s residual actionable findings (downstream-resolver-owned) with codex-adversarial residuals (synthesized in step 3 with `owner: downstream-resolver`). Assign each merged finding a stable `finding_id` (e.g., `<source>-<index>`) before any external dispatch. Keep the merged list in memory, indexed by `finding_id`, until step 5 finishes — tracker-defer's return shape only echoes lightweight fields, so the original `confidence`, `requires_human_judgment`, `source`, `suggested_fix`, and `applied_autofix` flags must be looked up on the local list when rendering the markdown.
+   2. Load `references/tracker-defer.md` in **non-interactive mode**. Pass the merged residual actionable findings (or run artifacts when summaries were truncated). Preserve each finding's `source` tag (`ce-code-review` or `codex-adversarial`) so tracker entries name the lane.
+   3. Collect the structured return: `{ filed: [...], failed: [...], no_sink: [...] }`. Each entry references a `finding_id` from step 1 so the local list can be joined back.
+   4. Compose a `## Residual Review Findings` markdown section. For every entry, look up the original finding by `finding_id` and render: severity, file:line, title, source lane, and the bucket-specific fields below. When the original finding has `requires_human_judgment: true` AND was NOT autofixed, append the inline marker `[needs human review]` to the bullet so the user can spot items requiring redirect even when they live in the standard buckets.
+      - For each item in `filed`: bullet plus a link to the tracker ticket URL.
+      - For each item in `failed`: bullet plus the failure reason (e.g., `Defer failed: gh returned 401 — tracker unavailable`).
+      - For each item in `no_sink`: bullet inlined verbatim so the PR body or fallback file is the durable record.
+   5. **Items applied with low confidence subsection.** If any finding was autofixed AND carried `confidence: low` or `requires_human_judgment: true` at the time of autofix, append a subsection titled `### Items applied with low confidence (please verify)` after the bullets above. Each entry shows: severity, file:line, title, source lane, the autofix that was applied, and a one-line reason the agent had doubt. (Items not autofixed because they required human decision are already marked `[needs human review]` in the bullets above — do not duplicate them here.) If no findings qualify, omit the subsection.
+   6. Detect the current branch's open PR without prompting:
 
       ```bash
       gh pr view --json number,url,body,state
       ```
 
-   6. If an open PR exists, update it directly with `gh`; do not load any confirmation-driven PR update skill. Append or replace the `## Residual Review Findings` section in the current PR body, write the new body to an OS temp file, then run:
+   7. If an open PR exists, update it directly with `gh`; do not load any confirmation-driven PR update skill. Append or replace the `## Residual Review Findings` section in the current PR body, write the new body to an OS temp file, then run:
 
       ```bash
       gh pr edit PR_NUMBER --body-file BODY_FILE
       ```
 
-   7. If no open PR exists, create a tracked fallback file at `docs/residual-review-findings/<branch-or-head-sha>.md` containing the composed section and the source PR-review run context. Stage only that file, commit it with `docs(review): record residual review findings`, and push the current branch. If an upstream exists, run `git push`. If no upstream exists, resolve a writable remote dynamically: prefer `origin` when present, otherwise use `git remote` and choose the first configured remote. Then run `git push --set-upstream <remote> HEAD`. This is the durable no-PR sink. Do not output DONE until either the existing PR body has been updated or this fallback file commit has been pushed. If both paths fail, stop and report the failed commands; do not silently proceed.
+   8. If no open PR exists, create a tracked fallback file at `docs/residual-review-findings/<branch-or-head-sha>.md` containing the composed section and the source PR-review run context. Stage only that file, commit it with `docs(review): record residual review findings`, and push the current branch. If an upstream exists, run `git push`. If no upstream exists, resolve a writable remote dynamically: prefer `origin` when present, otherwise use `git remote` and choose the first configured remote. Then run `git push --set-upstream <remote> HEAD`. This is the durable no-PR sink. Do not output DONE until either the existing PR body has been updated or this fallback file commit has been pushed. If both paths fail, stop and report the failed commands; do not silently proceed.
 
    Never block DONE on tracker filing failures once residuals have been durably recorded. A `no_sink` outcome is success only when the findings are present in the PR body or in the pushed fallback file.
 
@@ -129,16 +141,20 @@ If `delegation_active` is true but neither `codex_cli_available` nor `codex_mcp_
 
 7. Invoke the `ce-commit-push-pr` skill.
 
-   This commits any remaining changes, pushes the branch, and opens a pull request. If step 5 already opened a PR (check with `gh pr view --json number,url,state 2>/dev/null`), skip PR creation but still commit and push any uncommitted changes.
+   This commits any remaining changes, pushes the branch, and opens a pull request. If a PR already exists for this branch (e.g., it predated this run, or step 5 updated one rather than creating a fallback file), skip PR creation but still commit and push any uncommitted changes. Detect with:
+
+   ```bash
+   gh pr view --json number,url,state 2>/dev/null
+   ```
 
 8. Output `<promise>DONE</promise>` when complete.
 
 ## Provider auto-invoke mapping
 
-The set of providers recognized in `mcp_providers` is fixed in this iteration:
+This is a closed set of two recognized provider names. Unknown names exist only as a forward-compat reservation, not an extension point — adding a new built-in handler requires editing this skill.
 
-- **`codex`** — activates the codex-MCP fallback for delegation (step 2) and the parallel adversarial lane (step 3b). Independent of `adversarial_review_active`, but `adversarial_review_active=false` still wins.
-- **`perplexity`** — passed as `mcp_hint:perplexity` to `ce-plan` (step 1) and the work skill (step 2) so they prefer perplexity for external research lookups.
-- **Any other name** — accepted into the list but emits one notice per unknown name (`Provider <name> in mcp_providers has no built-in handler — skipping`) and otherwise no-op. Reserved for a future iteration with a generic provider plug-in protocol.
+- **`codex`** — when present in `mcp_providers` AND the codex MCP is loaded, enables the parallel adversarial review lane in step 3 (subject to `adversarial_review_active`). It does NOT change work-phase delegation; that is governed by `delegation_active` and the codex CLI alone, since `ce-work-beta` delegates via `codex exec`.
+- **`perplexity`** — passed as `mcp_hint:perplexity` to `ce-plan` (step 1) and the work skill (step 2) when the perplexity MCP is loaded, so they prefer perplexity for external research lookups.
+- **Any other name** — accepted into the list but emits one notice per unknown name (`Provider <name> in mcp_providers has no built-in handler — skipping`) and otherwise no-op.
 
 Start with the Tokens & Config block now, then plan FIRST, then work. Never skip the plan.
