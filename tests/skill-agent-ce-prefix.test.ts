@@ -14,6 +14,8 @@ const REF = `plugins/compound-engineering/AGENTS.md "Naming Convention"`
 const SKILL_EXEMPTIONS = new Set<string>([
   // lfg ships as the public command `/lfg` (see plugins/compound-engineering/README.md).
   "lfg",
+  // lfg-beta is the beta variant of /lfg with codex delegation + provider hints.
+  "lfg-beta",
 ])
 const AGENT_EXEMPTIONS = new Set<string>([])
 
