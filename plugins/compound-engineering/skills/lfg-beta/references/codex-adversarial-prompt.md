@@ -33,9 +33,11 @@ You are an adversarial code reviewer providing a second-model perspective on a d
 
 Plan: <<plan-path>>
 Repo root: <<repo-root>>
-
-Diff under review:
+Diff base (resolved SHA): <<base-sha>>
+Diff snapshot (frozen at: <<diff-path>>):
 <<git-diff-output>>
+
+All `line` numbers in your findings must reference the post-diff (HEAD-side) line numbers as they appear in the diff snapshot above. The orchestrator may not re-resolve them.
 
 Review the diff and return ONLY a JSON array (no prose, no markdown fences) matching this schema. Each finding is one object:
 
@@ -66,7 +68,8 @@ The orchestrator (`lfg-beta/SKILL.md` step 3) is responsible for:
 - Parsing the response. Unparseable output → single residual entry, pipeline continues.
 - Capability check. Codex MCP unavailable → skip lane silently.
 - Timeout/error. Codex errors → single residual entry, pipeline continues.
-- Autofix application. Serialized after `ce-code-review` autofix to avoid concurrent writes.
+- Lane ordering. Codex runs first (analysis-only against a frozen diff snapshot); `ce-code-review` runs after. Findings whose target file was touched by `ce-code-review`'s autofix are marked `stale_anchor: true` and not autofix-applied — they flow into the residual list.
+- Autofix gating. Findings are autofix-applied only when `autofixable: true` AND `requires_human_judgment: false` AND `confidence: high`. Findings that pass `autofixable` but are gated out by judgment or low confidence become residuals tagged `autofix_class: gated_auto`.
 - Residual routing. Findings tagged `source: codex-adversarial` flow into the standard residual handoff (step 5).
 
 Do not duplicate any of the above logic in this prompt — keep the prompt focused on the analytical task.

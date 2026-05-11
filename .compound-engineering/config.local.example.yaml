@@ -12,11 +12,11 @@
 # work_delegate_effort: high     # minimal | low | medium | high | xhigh (omit to use ~/.codex/config.toml default)
 
 # --- LFG-beta pipeline (autonomous full-feature workflow with delegation + provider hints) ---
-# Tokens on the /lfg-beta invocation override these (delegate:codex|delegate:local, providers:perplexity,codex,...).
+# Tokens on the /lfg-beta invocation override these (delegate:codex|delegate:local, providers:perplexity,codex,..., adversarial:on|off).
 
 # lfg_beta_delegate: codex                     # codex | false (default: false). When codex, step 2 routes to ce-work-beta with delegate:codex.
-# lfg_beta_providers: perplexity,codex         # comma-separated provider names (MCP, CLI, or installed skill). lfg-beta auto-detects what's available and surfaces capabilities to ce-plan / ce-work-beta as a providers_hint. `codex` also enables the parallel adversarial review lane when the codex MCP is loaded.
-# lfg_beta_adversarial_review: true            # true (default) | false. When true and codex MCP is loaded, runs a parallel codex-MCP adversarial review lane alongside ce-code-review.
+# lfg_beta_providers: perplexity,codex         # comma-separated provider names (MCP, CLI, or installed skill). Each name must match [a-z0-9_-]{2,32}. lfg-beta auto-detects what is available and surfaces capabilities to ce-plan / ce-work-beta as an advisory providers_hint annotation. The codex-MCP adversarial review lane is gated by lfg_beta_adversarial_review and MCP availability — NOT by listing `codex` here.
+# lfg_beta_adversarial_review: true            # true (default) | false. When true and codex MCP is loaded, runs a codex-MCP adversarial review lane in step 3 (codex runs first against a frozen diff, then ce-code-review).
 
 # --- Product pulse ---
 # Settings written by /ce-product-pulse first-run interview. Re-run the skill with
