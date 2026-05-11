@@ -242,16 +242,11 @@ run_fetch() {
 # gh returns no PR at all (empty PR_META or empty baseRefName), this block
 # silently falls through to the legacy auto-detect chain (Steps 2-4).
 if [ -z "$REVIEW_BASE_BRANCH" ] && command -v gh >/dev/null 2>&1; then
-  PR_META=$(gh pr view --json baseRefName,url 2>/dev/null || true)
+  PR_META=$(gh pr view --json baseRefName,url --jq '(.baseRefName // "") + "\t" + (.url // "")' 2>/dev/null || true)
   if [ -n "$PR_META" ]; then
-    if ! META_BRANCH=$(echo "$PR_META" | jq -r '.baseRefName // empty' 2>/dev/null); then
-      echo "ERROR:gh pr view returned metadata but resolve-base.sh could not parse gh pr view metadata with jq; cannot establish PR base repo for fail-closed resolution."
-      exit 0
-    fi
-    if ! META_URL=$(echo "$PR_META" | jq -r '.url // empty' 2>/dev/null); then
-      echo "ERROR:gh pr view returned metadata but resolve-base.sh could not parse gh pr view metadata with jq; cannot establish PR base repo for fail-closed resolution."
-      exit 0
-    fi
+    TAB=$(printf '\t')
+    META_BRANCH=${PR_META%%"$TAB"*}
+    META_URL=${PR_META#*"$TAB"}
     if [ -n "$META_BRANCH" ]; then
       if [ -z "$META_URL" ]; then
         echo "ERROR:gh pr view returned base branch '$META_BRANCH' but no URL; cannot establish PR base repo for fail-closed resolution. Pass --pr-url explicitly."

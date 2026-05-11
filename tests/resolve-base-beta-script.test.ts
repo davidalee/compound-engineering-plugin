@@ -88,6 +88,47 @@ async function writeExecutable(filePath: string, content: string): Promise<void>
   await fs.chmod(filePath, 0o755)
 }
 
+const RESOLVE_BASE_MINIMAL_TOOLS = [
+  "bash",
+  "env",
+  "git",
+  "mktemp",
+  "rm",
+  "sed",
+  "tail",
+  "tr",
+]
+
+async function firstExistingPath(candidates: string[]): Promise<string | null> {
+  for (const candidate of candidates) {
+    try {
+      await fs.access(candidate, fs.constants.X_OK)
+      return candidate
+    } catch {
+      // try next
+    }
+  }
+  return null
+}
+
+async function createResolveBasePathStub(): Promise<string> {
+  const stub = await fs.mkdtemp(path.join(os.tmpdir(), "resolve-base-beta-path-"))
+  for (const tool of RESOLVE_BASE_MINIMAL_TOOLS) {
+    const found = await firstExistingPath([
+      `/usr/bin/${tool}`,
+      `/bin/${tool}`,
+      `/opt/homebrew/bin/${tool}`,
+      `/usr/local/bin/${tool}`,
+      `/usr/sbin/${tool}`,
+      `/sbin/${tool}`,
+    ])
+    if (found) {
+      await fs.symlink(found, path.join(stub, tool)).catch(() => {})
+    }
+  }
+  return stub
+}
+
 // Source the script with RESOLVE_BASE_SOURCE_ONLY=1 and invoke the named
 // helper. Returns trimmed stdout and rc. The helper is invoked with `set +e`
 // because the script enables set -e at the top.
@@ -213,6 +254,12 @@ async function createGheStubBin(baseRefName: string, prUrl: string): Promise<str
     `#!/usr/bin/env bash
 set -euo pipefail
 if [ "$#" -ge 2 ] && [ "$1" = "pr" ] && [ "$2" = "view" ]; then
+  for ((i = 1; i <= $#; i++)); do
+    if [ "\${!i}" = "--jq" ]; then
+      printf '%s\\t%s' '${baseRefName}' '${prUrl}'
+      exit 0
+    fi
+  done
   printf '%s' '{"baseRefName":"${baseRefName}","url":"${prUrl}"}'
   exit 0
 fi
@@ -280,6 +327,51 @@ describe("resolve-base-beta.sh — end-to-end host-agnostic resolution", () => {
 
     expect(result.exitCode).toBe(0)
     expect(result.stdout.trim()).toBe(`BASE:${upstreamMainSha}`)
+  })
+
+  test("auto-detect PR metadata does not require standalone jq on PATH", async () => {
+    const repoRoot = await initRepo()
+    await commitFile(repoRoot, "history.txt", "a\n", "initial")
+    const upstreamMainSha = await commitFile(repoRoot, "history.txt", "b\n", "main advance")
+
+    await runGit(["checkout", "-b", "feature"], repoRoot)
+    await commitFile(repoRoot, "feature.txt", "feature\n", "feature change")
+
+    await runGit(
+      ["remote", "add", "upstream", "https://github.com/EveryInc/compound-engineering-plugin.git"],
+      repoRoot,
+    )
+    await runGit(["update-ref", "refs/remotes/upstream/main", upstreamMainSha], repoRoot)
+
+    const stubBin = await createResolveBasePathStub()
+    await writeExecutable(
+      path.join(stubBin, "gh"),
+      `#!/usr/bin/env bash
+set -euo pipefail
+if [ "$#" -ge 2 ] && [ "$1" = "pr" ] && [ "$2" = "view" ]; then
+  for ((i = 1; i <= $#; i++)); do
+    if [ "\${!i}" = "--jq" ]; then
+      printf '%s\\t%s' 'main' 'https://github.com/EveryInc/compound-engineering-plugin/pull/123'
+      exit 0
+    fi
+  done
+  printf '%s' '{"baseRefName":"main","url":"https://github.com/EveryInc/compound-engineering-plugin/pull/123"}'
+  exit 0
+fi
+exit 1
+`,
+    )
+    await expect(fs.stat(path.join(stubBin, "jq"))).rejects.toThrow()
+
+    const result = await runCommand(["bash", resolveBaseScript], repoRoot, {
+      ...gitEnv,
+      PATH: stubBin,
+    })
+
+    expect(result.exitCode).toBe(0)
+    expect(result.stdout.trim()).toBe(`BASE:${upstreamMainSha}`)
+    expect(result.stdout).not.toContain("jq")
+    expect(result.stdout).not.toMatch(/^ERROR:/)
   })
 
   test("--pr-url flag drives host-agnostic resolution end-to-end", async () => {
@@ -820,7 +912,7 @@ describe("resolve-base-beta.sh — end-to-end host-agnostic resolution", () => {
     expect(result.stdout).not.toMatch(/^BASE:/)
   })
 
-  test("auto-detect: gh pr view returns metadata but jq fails -> ERROR, no origin fallback", async () => {
+  test("auto-detect: gh pr view returns malformed metadata -> ERROR, no origin fallback", async () => {
     const repoRoot = await initRepo()
     await commitFile(repoRoot, "history.txt", "a\n", "initial")
     const forkMainSha = await commitFile(repoRoot, "history.txt", "b\n", "fork main advance")
@@ -837,13 +929,18 @@ describe("resolve-base-beta.sh — end-to-end host-agnostic resolution", () => {
       `#!/usr/bin/env bash
 set -euo pipefail
 if [ "$#" -ge 2 ] && [ "$1" = "pr" ] && [ "$2" = "view" ]; then
-  printf '%s' '{"baseRefName":"main","url":"https://github.com/EveryInc/compound-engineering-plugin/pull/1"}'
+  for ((i = 1; i <= $#; i++)); do
+    if [ "\${!i}" = "--jq" ]; then
+      printf '%s\\t%s' 'main' 'not-a-url'
+      exit 0
+    fi
+  done
+  printf '%s' '{"baseRefName":"main","url":"not-a-url"}'
   exit 0
 fi
 exit 1
 `,
     )
-    await writeExecutable(path.join(stubBin, "jq"), "#!/usr/bin/env bash\nexit 1\n")
 
     const result = await runCommand(["bash", resolveBaseScript], repoRoot, {
       ...gitEnv,
@@ -851,7 +948,7 @@ exit 1
     })
 
     expect(result.stdout).toMatch(/^ERROR:/)
-    expect(result.stdout).toContain("could not parse gh pr view metadata")
+    expect(result.stdout).toContain("unparseable PR URL")
     expect(result.stdout).not.toContain(`BASE:${forkMainSha}`)
     expect(result.stdout).not.toMatch(/^BASE:/)
   })
