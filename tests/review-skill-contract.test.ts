@@ -838,6 +838,17 @@ describe("ce-code-review contract", () => {
     expect(lfg).toMatch(/Never block DONE on tracker filing failures/i)
   })
 
+  test("lfg-beta references/tracker-defer.md stays byte-identical to lfg's copy", async () => {
+    // AGENTS.md mandates self-contained skill directories (no cross-skill references),
+    // so the file is duplicated rather than imported. This parity test catches drift
+    // — without it a fix to lfg/references/tracker-defer.md can silently fail to land
+    // in lfg-beta. If the two intentionally diverge in the future, update the assertion
+    // to compare on a stable shared section instead of byte equality.
+    const lfg = await readRepoFile("plugins/compound-engineering/skills/lfg/references/tracker-defer.md")
+    const lfgBeta = await readRepoFile("plugins/compound-engineering/skills/lfg-beta/references/tracker-defer.md")
+    expect(lfgBeta).toBe(lfg)
+  })
+
   test("ce-code-review autofix emits a residual-work summary in-chat, not only in the artifact", async () => {
     const content = await readRepoFile("plugins/compound-engineering/skills/ce-code-review/SKILL.md")
     expect(content).toMatch(/Emit a compact Residual Actionable Work summary/)

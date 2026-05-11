@@ -97,6 +97,7 @@ For `/ce-optimize`, see [`skills/ce-optimize/README.md`](./skills/ce-optimize/RE
 |-------|-------------|
 | `ce-polish-beta` | Human-in-the-loop polish phase after /ce-code-review — verifies review + CI, starts a dev server from `.claude/launch.json`, generates a testable checklist, and dispatches polish sub-agents for fixes. Emits stacked-PR seeds for oversized work |
 | `/lfg` | Full autonomous engineering workflow |
+| `/lfg-beta` | Same as `/lfg`, plus optional Codex CLI delegation (`delegate:codex`) and a configurable provider list (`providers:perplexity,codex,...`) that auto-detects available MCP servers, CLIs, and installed skills and surfaces them as hints to `ce-plan` / `ce-work-beta`. Adds a parallel codex-MCP adversarial review lane alongside `ce-code-review` |
 
 ## Agents
 
